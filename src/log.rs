@@ -8,12 +8,15 @@ pub fn dir() -> PathBuf {
     if let Ok(d) = std::env::var("PLATTER_DIR") {
         return PathBuf::from(d);
     }
-    if crate::device::is_root() {
-        PathBuf::from("/var/lib/platter")
-    } else {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-        PathBuf::from(home).join(".local/share/platter")
+    // Root writes to /var/lib/platter. Anyone else uses it too if it is
+    // already there and readable (so `platter list` works without sudo),
+    // otherwise falls back to a per-user directory.
+    let system = PathBuf::from("/var/lib/platter");
+    if crate::device::is_root() || std::fs::read_dir(&system).is_ok() {
+        return system;
     }
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    PathBuf::from(home).join(".local/share/platter")
 }
 
 fn path(serial: &str) -> PathBuf {

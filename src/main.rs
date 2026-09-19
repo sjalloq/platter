@@ -115,7 +115,7 @@ fn need_root(path: &str) -> Result<()> {
     use std::os::unix::fs::FileTypeExt;
     let is_block = std::fs::metadata(path).map(|m| m.file_type().is_block_device()).unwrap_or(true);
     if is_block && !device::is_root() {
-        bail!("this command needs root");
+        bail!("{path} is a block device - run with sudo");
     }
     Ok(())
 }
