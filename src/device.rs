@@ -8,6 +8,8 @@ use std::path::Path;
 use std::process::Command;
 
 pub const SECTOR: usize = 512;
+/// ioctl request number; the request type is c_ulong on glibc and c_int on musl.
+const BLKGETSIZE64: u64 = 0x8008_1272;
 
 /// Static identity of a drive, gathered once per run.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -61,7 +63,7 @@ fn block_size(file: &File, path: &str) -> Result<u64> {
     }
     // BLKGETSIZE64
     let mut size: u64 = 0;
-    let rc = unsafe { libc::ioctl(file.as_raw_fd(), 0x8008_1272u64 as libc::c_ulong, &mut size as *mut u64) };
+    let rc = unsafe { libc::ioctl(file.as_raw_fd(), BLKGETSIZE64 as _, &mut size as *mut u64) };
     if rc != 0 {
         bail!("BLKGETSIZE64 failed on {path}");
     }
