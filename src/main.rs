@@ -166,10 +166,10 @@ fn cmd_scan(path: &str, samples: usize, full: bool, note: Option<String>) -> Res
         full_pass = Some(v);
     }
     eprintln!(
-        "  smart_healthy={:?} power_on_hours={:?} critical={:?}",
-        s.healthy,
-        s.power_on_hours,
-        smart::nonzero_critical(&s)
+        "  smart_healthy={} power_on_hours={} critical={}",
+        smart::opt(&s.healthy),
+        smart::opt(&s.power_on_hours),
+        smart::critical_summary(&s)
     );
     eprintln!(
         "  signature={} nonzero_chunks={}/{}",
@@ -243,7 +243,7 @@ fn cmd_wipe(path: &str, method: wipe::Method, no_signature: bool, yes: bool, not
         r.verify.mb_per_s, r.verify.io_errors, r.verify.mismatched_blocks
     );
     if !delta.is_empty() {
-        eprintln!("  SMART moved during wipe: {delta:?}");
+        eprintln!("  SMART moved during wipe: {}", delta.iter().map(|(k, v)| format!("{k}:{v:+}")).collect::<Vec<_>>().join(", "));
     }
     eprintln!("  VERDICT: {verdict}");
     let p = log::append(

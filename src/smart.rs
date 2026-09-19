@@ -27,6 +27,21 @@ pub struct Snapshot {
     pub conveyance_minutes: Option<u64>,
 }
 
+/// Render an optional value for humans: "true", "13367", or "n/a".
+pub fn opt<T: std::fmt::Display>(v: &Option<T>) -> String {
+    v.as_ref().map(|x| x.to_string()).unwrap_or_else(|| "n/a".into())
+}
+
+/// Render nonzero critical attributes as "Reallocated_Sector_Ct=3, ..." or "none".
+pub fn critical_summary(s: &Snapshot) -> String {
+    let v = nonzero_critical(s);
+    if v.is_empty() {
+        "none".into()
+    } else {
+        v.iter().map(|(k, n)| format!("{k}={n}")).collect::<Vec<_>>().join(", ")
+    }
+}
+
 /// Attributes whose raw value should be zero on a good drive.
 pub const CRITICAL: &[(u64, &str)] = &[
     (5, "Reallocated_Sector_Ct"),

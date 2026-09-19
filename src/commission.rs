@@ -47,8 +47,11 @@ pub fn commission(dev: &Device, opts: &Options) -> Result<CommissionReport> {
             warnings.push(format!("{k} = {v} before testing"));
         }
         eprintln!(
-            "  SMART baseline: healthy={:?} hours={:?} cycles={:?} temp={:?}C",
-            before.healthy, before.power_on_hours, before.power_cycles, before.temperature_c
+            "  SMART baseline: healthy={} hours={} cycles={} temp={}C",
+            smart::opt(&before.healthy),
+            smart::opt(&before.power_on_hours),
+            smart::opt(&before.power_cycles),
+            smart::opt(&before.temperature_c)
         );
     }
 
