@@ -10,7 +10,7 @@ platter commission /dev/sdX [--write] [--long] acceptance test for a new drive
 platter wipe       /dev/sdX [-m zero|random|dod|nnsa]
 platter note       /dev/sdX|SERIAL "text"
 platter list
-platter show       SERIAL [-v]
+platter show       SERIAL [-v] [--json]  timeline, full reports, or raw records
 ```
 
 ## Commissioning a new drive

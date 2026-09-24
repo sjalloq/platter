@@ -314,11 +314,13 @@ fn cmd_show(serial: &str, verbose: bool, json: bool) -> Result<()> {
     if recs.is_empty() {
         bail!("no records for {serial} in {}", log::dir().display());
     }
+    if json {
+        // One document, so `| json_pp` and `| jq` work; `jq -c '.[]'` gives the
+        // log file's JSONL back.
+        println!("{}", serde_json::to_string_pretty(&recs)?);
+        return Ok(());
+    }
     for r in recs {
-        if json {
-            println!("{}", serde_json::to_string_pretty(&r)?);
-            continue;
-        }
         println!("{}", report::headline(&r));
         if verbose {
             let d = report::detail(&r);
