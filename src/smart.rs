@@ -1,6 +1,6 @@
 //! Thin wrapper over `smartctl -j`.
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -52,9 +52,48 @@ pub const CRITICAL: &[(u64, &str)] = &[
     (199, "UDMA_CRC_Error_Count"),
 ];
 
+/// Run smartctl and parse its `-j` output. The error explains *why* there is no
+/// JSON, which is usually the only clue worth having.
+fn smartctl_json(args: &[&str]) -> Result<Value> {
+    let out = crate::device::run_cmd_full("smartctl", args)
+        .context("could not run smartctl (is smartmontools installed?)")?;
+    serde_json::from_str(&out.stdout).map_err(|e| {
+        let err = out.stderr.trim();
+        if err.is_empty() {
+            anyhow!("smartctl produced no usable JSON: {e}")
+        } else {
+            anyhow!("smartctl failed: {}", one_line(err))
+        }
+    })
+}
+
 fn smartctl(args: &[&str]) -> Option<Value> {
-    let out = crate::device::run_cmd("smartctl", args)?;
-    serde_json::from_str(&out).ok()
+    smartctl_json(args).ok()
+}
+
+fn one_line(s: &str) -> String {
+    s.split('\n').map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join("; ")
+}
+
+/// smartctl's own explanation of a refusal, e.g. "Can't start self-test without
+/// aborting current test (90% remaining)".
+fn messages(v: &Value) -> String {
+    let m = v["smartctl"]["messages"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|m| m["string"].as_str())
+                .map(one_line)
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join("; ")
+        })
+        .unwrap_or_default();
+    if m.is_empty() {
+        "no reason given".into()
+    } else {
+        m
+    }
 }
 
 pub fn snapshot(dev: &str) -> Option<Snapshot> {
@@ -135,13 +174,19 @@ pub struct SelfTestResult {
     pub minutes: f64,
 }
 
-/// Kick off a SMART self-test and block until it finishes.
-pub fn run_selftest(dev: &str, kind: TestKind, budget_minutes: u64) -> Result<SelfTestResult> {
-    let start = smartctl(&["-j", "-t", kind.arg(), dev]);
-    let exit = start.as_ref().and_then(|v| v["smartctl"]["exit_status"].as_u64()).unwrap_or(1);
-    if exit & 0x04 != 0 || start.is_none() {
-        bail!("smartctl could not start {} self-test", kind.arg());
-    }
+/// Percent remaining if a self-test is running on the drive right now.
+fn selftest_remaining(dev: &str) -> Option<u64> {
+    let v = smartctl(&["-j", "-c", dev])?;
+    let st = &v["ata_smart_data"]["self_test"]["status"];
+    let code = st["value"].as_u64()?;
+    (0xf0..=0xff)
+        .contains(&code)
+        .then(|| st["remaining_percent"].as_u64().unwrap_or(100))
+}
+
+/// Poll until no self-test is running, drawing a progress bar, and return the
+/// status the drive settled on.
+fn wait_until_idle(dev: &str, label: &str, budget_minutes: u64) -> Result<(String, bool)> {
     let t0 = Instant::now();
     let deadline = Duration::from_secs(budget_minutes * 60 + 120);
     let bar = indicatif::ProgressBar::new(100);
@@ -150,32 +195,49 @@ pub fn run_selftest(dev: &str, kind: TestKind, budget_minutes: u64) -> Result<Se
             .unwrap()
             .progress_chars("=> "),
     );
-    bar.set_message(format!("SMART {} self-test", kind.arg()));
+    bar.set_message(label.to_string());
     loop {
         std::thread::sleep(Duration::from_secs(15));
-        let v = match smartctl(&["-j", "-c", dev]) {
-            Some(v) => v,
-            None => continue,
-        };
-        let st = &v["ata_smart_data"]["self_test"]["status"];
-        let code = st["value"].as_u64().unwrap_or(0);
-        if (0xf0..=0xff).contains(&code) {
-            let remaining = st["remaining_percent"].as_u64().unwrap_or(100);
-            bar.set_position(100 - remaining);
-        } else {
-            bar.finish_and_clear();
-            let status = st["string"].as_str().unwrap_or("unknown").to_string();
-            let passed = st["passed"].as_bool().unwrap_or(code == 0);
-            return Ok(SelfTestResult {
-                kind: kind.arg().into(),
-                passed,
-                status,
-                minutes: t0.elapsed().as_secs_f64() / 60.0,
-            });
+        if let Some(v) = smartctl(&["-j", "-c", dev]) {
+            let st = &v["ata_smart_data"]["self_test"]["status"];
+            let code = st["value"].as_u64().unwrap_or(0);
+            if !(0xf0..=0xff).contains(&code) {
+                bar.finish_and_clear();
+                let status = st["string"].as_str().unwrap_or("unknown").to_string();
+                return Ok((status, st["passed"].as_bool().unwrap_or(code == 0)));
+            }
+            bar.set_position(100 - st["remaining_percent"].as_u64().unwrap_or(100));
         }
         if t0.elapsed() > deadline {
             bar.finish_and_clear();
-            bail!("{} self-test did not finish within {} min", kind.arg(), budget_minutes);
+            bail!("self-test still running after {budget_minutes} min (abort it with `smartctl -X {dev}`)");
         }
     }
+}
+
+/// Kick off a SMART self-test and block until it finishes.
+///
+/// A test left behind by an interrupted run is still running on the drive, and
+/// the firmware will refuse to start another one, so wait it out first.
+pub fn run_selftest(dev: &str, kind: TestKind, budget_minutes: u64) -> Result<SelfTestResult> {
+    if let Some(remaining) = selftest_remaining(dev) {
+        eprintln!("  a self-test is already running ({remaining}% remaining) - waiting for it");
+        let (status, _) = wait_until_idle(dev, "previous SMART self-test", budget_minutes)?;
+        eprintln!("  previous self-test finished: {status}");
+    }
+    let start = smartctl_json(&["-j", "-t", kind.arg(), dev])
+        .map_err(|e| anyhow!("could not start it: {e}"))?;
+    let exit = start["smartctl"]["exit_status"].as_u64().unwrap_or(1);
+    if exit & 0x04 != 0 {
+        bail!("smartctl refused to start it: {}", messages(&start));
+    }
+    let t0 = Instant::now();
+    let (status, passed) =
+        wait_until_idle(dev, &format!("SMART {} self-test", kind.arg()), budget_minutes)?;
+    Ok(SelfTestResult {
+        kind: kind.arg().into(),
+        passed,
+        status,
+        minutes: t0.elapsed().as_secs_f64() / 60.0,
+    })
 }

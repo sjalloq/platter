@@ -80,9 +80,22 @@ pub fn hostname() -> String {
         .unwrap_or_else(|_| "unknown".into())
 }
 
-pub fn run_cmd(cmd: &str, args: &[&str]) -> Option<String> {
+/// Captured output of a child process.
+pub struct CmdOut {
+    pub stdout: String,
+    pub stderr: String,
+}
+
+pub fn run_cmd_full(cmd: &str, args: &[&str]) -> Option<CmdOut> {
     let out = Command::new(cmd).args(args).output().ok()?;
-    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+    Some(CmdOut {
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    })
+}
+
+pub fn run_cmd(cmd: &str, args: &[&str]) -> Option<String> {
+    run_cmd_full(cmd, args).map(|o| o.stdout)
 }
 
 /// Refuse to touch anything that is mounted or otherwise in use.
