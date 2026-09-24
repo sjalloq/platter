@@ -2,6 +2,7 @@ mod commission;
 mod device;
 mod io;
 mod log;
+mod report;
 mod scan;
 mod smart;
 mod wipe;
@@ -82,9 +83,12 @@ enum Cmd {
     /// Event history for one serial.
     Show {
         serial: String,
-        /// Dump the full JSON records.
+        /// Expand each event into a full report.
         #[arg(short, long)]
         verbose: bool,
+        /// Dump the raw JSON records instead.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -106,7 +110,7 @@ fn main() -> Result<()> {
         }
         Cmd::Note { target, text } => cmd_note(&target, &text),
         Cmd::List => cmd_list(),
-        Cmd::Show { serial, verbose } => cmd_show(&serial, verbose),
+        Cmd::Show { serial, verbose, json } => cmd_show(&serial, verbose, json),
     }
 }
 
@@ -294,7 +298,7 @@ fn cmd_list() -> Result<()> {
         let (ts, ev, verdict) = last
             .map(|r| {
                 (
-                    r["ts"].as_str().unwrap_or("").chars().take(16).collect::<String>(),
+                    r["ts"].as_str().unwrap_or("").replacen('T', " ", 1).chars().take(16).collect::<String>(),
                     r["event"].as_str().unwrap_or("").to_string(),
                     r["verdict"].as_str().unwrap_or("").to_string(),
                 )
@@ -305,21 +309,22 @@ fn cmd_list() -> Result<()> {
     Ok(())
 }
 
-fn cmd_show(serial: &str, verbose: bool) -> Result<()> {
+fn cmd_show(serial: &str, verbose: bool, json: bool) -> Result<()> {
     let recs = log::load(serial);
     if recs.is_empty() {
         bail!("no records for {serial} in {}", log::dir().display());
     }
     for r in recs {
-        let detail = r["verdict"].as_str().or(r["note"].as_str()).unwrap_or("");
-        println!(
-            "{}  {:<16} {}",
-            r["ts"].as_str().unwrap_or(""),
-            r["event"].as_str().unwrap_or(""),
-            detail
-        );
-        if verbose {
+        if json {
             println!("{}", serde_json::to_string_pretty(&r)?);
+            continue;
+        }
+        println!("{}", report::headline(&r));
+        if verbose {
+            let d = report::detail(&r);
+            if !d.is_empty() {
+                println!("{d}\n");
+            }
         }
     }
     Ok(())
